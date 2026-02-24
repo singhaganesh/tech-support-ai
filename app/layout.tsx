@@ -3,7 +3,7 @@ import '../src/app/globals.css';
 
 export const metadata: Metadata = {
     title: 'Dexter Support AI',
-    description: 'Powered by Llama 3 & Pinecone',
+    description: 'Service Engineer Chatbot — Powered by SEPLE',
 };
 
 export default function RootLayout({

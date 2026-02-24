@@ -2,12 +2,26 @@
 
 import { useChat } from 'ai/react';
 import { useRef, useEffect, useState } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { useRouter } from 'next/navigation';
 import qaData from '../data/hms-dexter-qa.json';
 
 export default function Chat() {
     const { messages, input, handleInputChange, handleSubmit, isLoading, append } = useChat();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
+    const [userEmail, setUserEmail] = useState<string | null>(null);
+    const supabase = createClient();
+    const router = useRouter();
+
+    // Get user info on mount
+    useEffect(() => {
+        const getUser = async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            setUserEmail(user?.email ?? null);
+        };
+        getUser();
+    }, []);
 
     // Load 4 random questions on mount
     useEffect(() => {
@@ -19,6 +33,11 @@ export default function Chat() {
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
+
+    const handleLogout = async () => {
+        await supabase.auth.signOut();
+        router.push('/login');
+    };
 
     return (
         <div className="flex flex-col min-h-screen bg-neutral-950 text-neutral-100 font-sans selection:bg-orange-500/30">
@@ -34,6 +53,21 @@ export default function Chat() {
                             <h1 className="text-xl font-bold tracking-tight text-white leading-tight">Dexter Tech Support <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-amber-300">AI</span></h1>
                             <p className="text-xs text-neutral-400 font-medium">Powered by SEPLE</p>
                         </div>
+                    </div>
+
+                    {/* User Info + Logout */}
+                    <div className="flex items-center gap-3">
+                        {userEmail && (
+                            <span className="text-xs text-neutral-400 hidden sm:block truncate max-w-[180px]">
+                                {userEmail}
+                            </span>
+                        )}
+                        <button
+                            onClick={handleLogout}
+                            className="text-xs px-3 py-1.5 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-300 hover:bg-neutral-700 hover:text-white transition-all"
+                        >
+                            Logout
+                        </button>
                     </div>
                 </div>
             </header>

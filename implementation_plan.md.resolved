@@ -1,0 +1,162 @@
+# Service Engineer Chatbot — Full Implementation Plan
+
+## 📊 PRD Gap Analysis
+
+| PRD Feature | Status | What Exists | What's Missing |
+|---|---|---|---|
+| Real-Time Chat | ✅ Partial | RAG pipeline with Pinecone + Sarvam LLM | Needs Supabase for KB storage per PRD |
+| Translation | ✅ Partial | Bengali-only via Sarvam prompt hack | Multi-language selection UI, Sarvam Translation API |
+| Voice Assistant | ❌ Not Built | — | STT, TTS via Sarvam, mic/speaker UI |
+| Image Solution | ❌ Not Built | — | Image upload, vision model analysis |
+| Chat History | ❌ Not Built | — | Supabase tables, session management |
+| Login & Auth | ❌ Not Built | — | Supabase Auth, protected routes |
+
+---
+
+## Phase 1: Supabase Setup + Email Magic Link Authentication
+
+> [!IMPORTANT]
+> This is the foundation. Every other feature (Chat History, per-user sessions) depends on having authenticated users. Must be built first.
+
+### Auth Method: Email Magic Link (Passwordless)
+- Engineer enters their email on the login page
+- Supabase sends a one-time login link to their inbox
+- Engineer clicks the link → automatically logged in (no password needed)
+- Session stays active for 7 days before requiring re-authentication
+
+### New Dependencies
+```bash
+npm install @supabase/supabase-js @supabase/ssr
+```
+
+### Supabase Schema
+```sql
+-- Users are managed by Supabase Auth automatically
+
+-- Chat sessions table
+CREATE TABLE chat_sessions (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  title TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Chat messages table
+CREATE TABLE chat_messages (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  role TEXT CHECK (role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  language TEXT DEFAULT 'en',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+### File Changes
+| Action | File | Purpose |
+|---|---|---|
+| NEW | `lib/supabase/client.ts` | Browser-side Supabase client |
+| NEW | `lib/supabase/server.ts` | Server-side Supabase client (for API routes) |
+| NEW | `app/login/page.tsx` | Login page with "Enter email" form + "Send Magic Link" button |
+| NEW | `app/login/check-email/page.tsx` | "Check your inbox" confirmation page |
+| NEW | `app/auth/callback/route.ts` | Handles the magic link redirect, exchanges token for session |
+| NEW | `middleware.ts` | Protects all routes except `/login` — redirects unauthenticated users |
+| MODIFY | [app/layout.tsx](file:///d:/Ganesh/Office/Personal%20AI%20Agent/app/layout.tsx) | Wrap app in Supabase session provider |
+| MODIFY | [app/page.tsx](file:///d:/Ganesh/Office/Personal%20AI%20Agent/app/page.tsx) | Show user email in header, add logout button |
+
+### Environment Variables
+```
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
+```
+
+---
+
+## Phase 2: Chat History
+
+### File Changes
+| Action | File | Purpose |
+|---|---|---|
+| NEW | `app/api/history/route.ts` | API to save/fetch chat messages from Supabase |
+| NEW | `components/Sidebar.tsx` | Left sidebar showing past chat sessions |
+| NEW | `app/chat/[sessionId]/page.tsx` | Dynamic route to load a specific past session |
+| MODIFY | [app/api/chat/route.ts](file:///d:/Ganesh/Office/Personal%20AI%20Agent/app/api/chat/route.ts) | After streaming response, save both user message and AI response to Supabase |
+| MODIFY | [app/page.tsx](file:///d:/Ganesh/Office/Personal%20AI%20Agent/app/page.tsx) | Add sidebar toggle, "New Chat" button, session list |
+
+### Data Flow
+1. User sends message → save to `chat_messages` with `role: 'user'`
+2. AI generates response → save to `chat_messages` with `role: 'assistant'`
+3. Sidebar queries `chat_sessions` for the logged-in user
+4. Clicking a session loads its `chat_messages` ordered by `created_at`
+
+---
+
+## Phase 3: Multi-Language Translation (Enhanced)
+
+Currently, the translation is hardcoded to Bengali via a prompt hack. The PRD requires support for Hindi, Bengali, Tamil, and other Indian languages with proper Sarvam Translation API calls.
+
+### File Changes
+| Action | File | Purpose |
+|---|---|---|
+| NEW | `components/LanguageSelector.tsx` | Dropdown to pick language (Hindi, Bengali, Tamil, etc.) |
+| MODIFY | [app/api/chat/route.ts](file:///d:/Ganesh/Office/Personal%20AI%20Agent/app/api/chat/route.ts) | Replace prompt-based translation with Sarvam's dedicated `/translate` API. Accept `language` param from frontend. |
+| MODIFY | [app/page.tsx](file:///d:/Ganesh/Office/Personal%20AI%20Agent/app/page.tsx) | Add language selector to header. Pass selected language with each message. |
+
+### Architecture Change
+```
+Current:  Bengali prompt hack → Sarvam LLM translates via system prompt
+New:      Sarvam /translate API (Bengali→English) → Pinecone → Sarvam /translate API (English→Bengali)
+```
+Using the dedicated Translation API is faster and more accurate than asking the LLM to translate.
+
+---
+
+## Phase 4: Voice Assistant (STT + TTS)
+
+### New Dependencies
+```bash
+npm install @sarvam-ai/sdk  # If available, else use fetch() to hit Sarvam REST APIs directly
+```
+
+### File Changes
+| Action | File | Purpose |
+|---|---|---|
+| NEW | `app/api/stt/route.ts` | Accepts audio blob, calls Sarvam STT API, returns text |
+| NEW | `app/api/tts/route.ts` | Accepts text string, calls Sarvam TTS API, returns audio |
+| NEW | `components/VoiceButton.tsx` | Mic button with recording state, waveform animation |
+| NEW | `hooks/useVoiceRecorder.ts` | Custom hook for `MediaRecorder` API |
+| MODIFY | [app/page.tsx](file:///d:/Ganesh/Office/Personal%20AI%20Agent/app/page.tsx) | Add mic button next to send button. Add speaker icon on AI messages. |
+
+### Data Flow (Voice Mode)
+1. Engineer presses 🎤 → browser records audio via `MediaRecorder`
+2. Audio blob sent to `POST /api/stt` → Sarvam STT returns text
+3. Text auto-populates input → triggers normal chat pipeline
+4. AI response text sent to `POST /api/tts` → Sarvam TTS returns audio
+5. Browser plays audio via `<audio>` element or `AudioContext`
+
+---
+
+## Phase 5: Image Solution
+
+### File Changes
+| Action | File | Purpose |
+|---|---|---|
+| NEW | `app/api/analyze-image/route.ts` | Accepts image upload, sends to vision model (Gemini 1.5 Pro Vision or GPT-4o), returns analysis |
+| NEW | `components/ImageUpload.tsx` | Drag-and-drop or camera capture UI component |
+| MODIFY | [app/page.tsx](file:///d:/Ganesh/Office/Personal%20AI%20Agent/app/page.tsx) | Add 📷 button next to input. Display uploaded image in chat bubble. |
+
+### Architecture
+Since Sarvam does not offer a Vision model, we will use **Google Gemini 1.5 Pro** (which you already have a key for) to analyze uploaded panel images, error codes, and wiring photos.
+
+---
+
+## Verification Plan
+
+### Per-Phase Testing
+| Phase | Test |
+|---|---|
+| 1. Auth | Register → Login → Access chat → Logout → Verify redirect to login |
+| 2. History | Send 3 messages → Refresh page → Verify messages persist in sidebar |
+| 3. Translation | Select Hindi → Ask question → Verify Hindi response. Switch to Tamil → Verify Tamil response |
+| 4. Voice | Press mic → Speak → Verify text appears → Verify audio plays back |
+| 5. Image | Upload panel photo → Verify AI describes the issue and provides troubleshooting steps |
